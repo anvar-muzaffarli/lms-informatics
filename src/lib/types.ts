@@ -58,6 +58,7 @@ export interface Question {
   correct: number
   explanation: string | null
   topic: string | null
+  image_path: string | null
 }
 
 export interface Attempt {

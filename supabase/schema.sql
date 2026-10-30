@@ -87,6 +87,8 @@ create table if not exists public.questions (
   created_at timestamptz not null default now()
 );
 create index if not exists questions_test_idx on public.questions(test_id, position);
+-- v2: şəkilli suallar
+alter table public.questions add column if not exists image_path text;
 
 create table if not exists public.attempts (
   id uuid primary key default gen_random_uuid(),
@@ -266,7 +268,7 @@ begin
     'answers', v_att.answers,
     'tab_switches', v_att.tab_switches,
     'questions', (
-      select jsonb_agg(jsonb_build_object('id', q.id, 'text', q.text, 'options', q.options) order by u.ord)
+      select jsonb_agg(jsonb_build_object('id', q.id, 'text', q.text, 'options', q.options, 'image', q.image_path) order by u.ord)
       from unnest(v_att.question_ids) with ordinality as u(qid, ord)
       join public.questions q on q.id = u.qid
     )
@@ -320,7 +322,7 @@ begin
     'questions', case when t.show_answers or v_admin then (
       select jsonb_agg(jsonb_build_object(
         'id', q.id, 'text', q.text, 'options', q.options, 'correct', q.correct,
-        'chosen', (a.answers ->> q.id::text)::int, 'explanation', q.explanation
+        'chosen', (a.answers ->> q.id::text)::int, 'explanation', q.explanation, 'image', q.image_path
       ) order by u.ord)
       from unnest(a.question_ids) with ordinality as u(qid, ord)
       join public.questions q on q.id = u.qid
@@ -378,3 +380,21 @@ create policy "materials_student_read" on storage.objects for select to authenti
     join public.material_groups mg on mg.material_id = m.id
     where m.file_path = storage.objects.name and mg.group_id = public.my_group()
   ));
+
+-- ---------------------------------------------------------------------
+-- v2: SUAL ŞƏKİLLƏRİ (gizli bucket, yalnız daxil olmuş istifadəçilər oxuya bilər)
+-- ---------------------------------------------------------------------
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('question-images', 'question-images', false, 5242880, array['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+on conflict (id) do nothing;
+
+drop policy if exists "qimg_admin_all" on storage.objects;
+drop policy if exists "qimg_read" on storage.objects;
+
+create policy "qimg_admin_all" on storage.objects for all to authenticated
+  using (bucket_id = 'question-images' and public.is_admin())
+  with check (bucket_id = 'question-images' and public.is_admin());
+
+-- Şəkil adları təsadüfi UUID-dir; testdən kənar heç bir yerdə göstərilmir.
+create policy "qimg_read" on storage.objects for select to authenticated
+  using (bucket_id = 'question-images');

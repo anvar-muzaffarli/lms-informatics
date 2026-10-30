@@ -7,6 +7,7 @@ import type { Group, Question, Test } from '../../lib/types'
 import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Modal, PageTitle, Select, Spinner, Textarea } from '../../components/ui'
 import GroupPicker from '../../components/GroupPicker'
 import { downloadQuestionTemplate, exportXlsx, LETTERS, parseQuestionRows, readSheet, type ParsedQuestion } from '../../lib/utils'
+import { letterOnly, removeQuestionImages, uploadQuestionImage, useSignedImages } from '../../lib/images'
 
 const toLocal = (s: string | null) => {
   if (!s) return ''
@@ -48,6 +49,8 @@ export default function AdminTestEdit() {
     }
   }, [data])
 
+  const urls = useSignedImages(data?.questions.map((q) => q.image_path) ?? [])
+
   if (loading || !t) return error ? <ErrorBox>{error}</ErrorBox> : <Spinner />
   if (!data) return null
   const qs = data.questions
@@ -76,12 +79,14 @@ export default function AdminTestEdit() {
   const delQ = async (q: Question) => {
     if (!confirm('Bu sual silinsin?')) return
     await supabase.from('questions').delete().eq('id', q.id)
+    await removeQuestionImages([q.image_path])
     reload()
   }
 
   const clearAll = async () => {
     if (!confirm(`Bütün ${qs.length} sual silinsin?`)) return
     await supabase.from('questions').delete().eq('test_id', t.id)
+    await removeQuestionImages(qs.map((q) => q.image_path))
     reload()
   }
 
@@ -140,16 +145,22 @@ export default function AdminTestEdit() {
                 <span className="mt-0.5 text-sm font-bold text-slate-400">{i + 1}.</span>
                 <div className="min-w-0 flex-1">
                   <p className="whitespace-pre-wrap font-medium text-slate-900">{q.text}</p>
+                  {q.image_path && urls[q.image_path] && (
+                    <a href={urls[q.image_path]} target="_blank" rel="noreferrer">
+                      <img src={urls[q.image_path]} alt="" className="mt-2 max-h-56 max-w-full rounded border border-slate-200 object-contain" loading="lazy" />
+                    </a>
+                  )}
                   <div className="mt-2 grid gap-1 sm:grid-cols-2">
                     {q.options.map((o, j) => (
                       <div key={j} className={`rounded px-2 py-1 text-sm ${j === q.correct ? 'bg-emerald-50 font-medium text-emerald-800' : 'text-slate-600'}`}>
-                        <b>{LETTERS[j]})</b> {o}
+                        <b>{LETTERS[j]})</b> {letterOnly(q.options) ? (j === q.correct ? '✓' : '') : o}
                       </div>
                     ))}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1">
                     {q.topic && <Badge color="indigo">{q.topic}</Badge>}
                     {q.explanation && <Badge>İzah var</Badge>}
+                    {q.image_path && <Badge color="amber">Şəkilli</Badge>}
                   </div>
                 </div>
                 <div className="flex flex-col">
@@ -208,16 +219,46 @@ export default function AdminTestEdit() {
   )
 }
 
+type ZipImages = Map<string, () => Promise<Blob>>
+
 function ImportModal({ open, testId, startPos, onClose, onDone }: { open: boolean; testId: string; startPos: number; onClose: () => void; onDone: () => void }) {
   const [parsed, setParsed] = useState<{ ok: ParsedQuestion[]; errors: string[] } | null>(null)
+  const [images, setImages] = useState<ZipImages | null>(null)
   const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState('')
   const [err, setErr] = useState('')
 
   const onFile = async (f?: File) => {
     if (!f) return
     setErr('')
+    setImages(null)
     try {
-      setParsed(parseQuestionRows(await readSheet(f)))
+      if (/\.zip$/i.test(f.name)) {
+        const JSZip = (await import('jszip')).default
+        const zip = await JSZip.loadAsync(f)
+        const files = Object.values(zip.files).filter((z) => !z.dir && !z.name.startsWith('__MACOSX'))
+        const sheet = files.find((z) => /\.(xlsx|xls|csv)$/i.test(z.name))
+        if (!sheet) throw new Error('ZIP faylında Excel faylı tapılmadı')
+        const map: ZipImages = new Map()
+        files.filter((z) => /\.(png|jpe?g|webp|gif)$/i.test(z.name)).forEach((z) => {
+          const base = z.name.split('/').pop()!.toLowerCase()
+          map.set(base, () => z.async('blob'))
+        })
+        const result = parseQuestionRows(await readSheet(await sheet.async('arraybuffer')))
+        const missing = result.ok.filter((q) => q.image && !map.has(q.image.split('/').pop()!.toLowerCase()))
+        missing.forEach((q) => result.errors.push(`"${q.image}" şəkli ZIP-də tapılmadı (sual: ${q.text.slice(0, 40)}…)`))
+        result.ok = result.ok.filter((q) => !missing.includes(q))
+        setImages(map)
+        setParsed(result)
+      } else {
+        const result = parseQuestionRows(await readSheet(f))
+        const withImg = result.ok.filter((q) => q.image)
+        if (withImg.length) {
+          result.errors.push(`${withImg.length} sualda şəkil göstərilib. Şəkilləri də yükləmək üçün Excel faylını şəkillərlə birlikdə ZIP kimi seçin.`)
+          result.ok = result.ok.filter((q) => !q.image)
+        }
+        setParsed(result)
+      }
     } catch (e: any) {
       setErr('Fayl oxuna bilmədi: ' + e.message)
     }
@@ -226,10 +267,26 @@ function ImportModal({ open, testId, startPos, onClose, onDone }: { open: boolea
   const go = async () => {
     if (!parsed) return
     setBusy(true)
+    setErr('')
     try {
-      const rows = parsed.ok.map((q, i) => ({ ...q, test_id: testId, position: startPos + i + 1 }))
+      const rows: Record<string, unknown>[] = []
+      let done = 0
+      const total = parsed.ok.filter((q) => q.image).length
+      for (const [i, q] of parsed.ok.entries()) {
+        let image_path: string | null = null
+        if (q.image && images) {
+          const name = q.image.split('/').pop()!
+          const blob = await images.get(name.toLowerCase())!()
+          image_path = await uploadQuestionImage(testId, blob, name)
+          setProgress(`Şəkillər yüklənir: ${++done}/${total}`)
+        }
+        const { image: _img, ...rest } = q
+        rows.push({ ...rest, image_path, test_id: testId, position: startPos + i + 1 })
+      }
+      setProgress('Suallar yazılır...')
       for (let i = 0; i < rows.length; i += 200) must(await supabase.from('questions').insert(rows.slice(i, i + 200)).select('id'))
       setParsed(null)
+      setProgress('')
       onDone()
     } catch (e: any) {
       setErr(e.message)
@@ -239,20 +296,21 @@ function ImportModal({ open, testId, startPos, onClose, onDone }: { open: boolea
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Sualları Excel-dən yüklə" wide>
+    <Modal open={open} onClose={onClose} title="Sualları fayldan yüklə" wide>
       <div className="space-y-4">
         <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
-          Sütunlar: <b>Sual</b>, <b>A</b>, <b>B</b>, <b>C</b>, <b>D</b>, <b>E</b> (lazım olduğu qədər), <b>Düzgün</b> (A–F hərfi), <b>İzah</b> və <b>Mövzu</b> (könüllü).
-          Excel (.xlsx) və CSV qəbul olunur.
+          Sütunlar: <b>Sual</b>, <b>A</b>, <b>B</b>, <b>C</b>, <b>D</b>, <b>E</b> (lazım olduğu qədər), <b>Düzgün</b> (A–F hərfi), <b>İzah</b>, <b>Mövzu</b> və <b>Şəkil</b> (könüllü).
+          Excel (.xlsx) və CSV qəbul olunur. <b>Şəkilli suallar</b> üçün Excel faylını və şəkilləri bir <b>ZIP</b> faylına yığın: "Şəkil" sütununda şəklin fayl adı yazılır (məs. 012.png).
           <button onClick={downloadQuestionTemplate} className="ml-1 font-medium text-indigo-600 underline cursor-pointer">Nümunə faylı yüklə</button>
         </div>
-        <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => onFile(e.target.files?.[0])} className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-4 file:py-2 file:text-indigo-700" />
+        <input type="file" accept=".xlsx,.xls,.csv,.zip" onChange={(e) => onFile(e.target.files?.[0])} className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-4 file:py-2 file:text-indigo-700" />
         {err && <ErrorBox>{err}</ErrorBox>}
         {parsed && (
           <>
-            <div className="flex gap-3 text-sm">
+            <div className="flex flex-wrap gap-3 text-sm">
               <Badge color="green">{parsed.ok.length} sual hazırdır</Badge>
-              {parsed.errors.length > 0 && <Badge color="red">{parsed.errors.length} sətirdə xəta</Badge>}
+              {parsed.ok.some((q) => q.image) && <Badge color="amber">{parsed.ok.filter((q) => q.image).length} şəkilli</Badge>}
+              {parsed.errors.length > 0 && <Badge color="red">{parsed.errors.length} xəbərdarlıq</Badge>}
             </div>
             {parsed.errors.length > 0 && (
               <div className="max-h-32 overflow-y-auto rounded-lg bg-rose-50 p-3 text-xs text-rose-700">
@@ -262,16 +320,17 @@ function ImportModal({ open, testId, startPos, onClose, onDone }: { open: boolea
             <div className="max-h-72 space-y-2 overflow-y-auto">
               {parsed.ok.slice(0, 50).map((q, i) => (
                 <div key={i} className="rounded-lg border border-slate-200 p-3 text-sm">
-                  <div className="font-medium">{i + 1}. {q.text}</div>
+                  <div className="font-medium">{i + 1}. {q.text} {q.image && <span className="text-xs text-amber-700">[şəkil: {q.image}]</span>}</div>
                   <div className="mt-1 text-xs text-slate-600">
-                    {q.options.map((o, j) => <span key={j} className={j === q.correct ? 'mr-3 font-bold text-emerald-700' : 'mr-3'}>{LETTERS[j]}) {o}</span>)}
+                    {q.options.map((o, j) => <span key={j} className={j === q.correct ? 'mr-3 font-bold text-emerald-700' : 'mr-3'}>{LETTERS[j]}) {letterOnly(q.options) ? '' : o}</span>)}
                   </div>
                 </div>
               ))}
               {parsed.ok.length > 50 && <p className="text-center text-xs text-slate-500">...və daha {parsed.ok.length - 50} sual</p>}
             </div>
+            {progress && <p className="text-sm text-indigo-700">{progress}</p>}
             <div className="flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => setParsed(null)}>Ləğv et</Button>
+              <Button variant="secondary" onClick={() => setParsed(null)} disabled={busy}>Ləğv et</Button>
               <Button onClick={go} loading={busy} disabled={!parsed.ok.length}>{parsed.ok.length} sualı əlavə et</Button>
             </div>
           </>
@@ -287,6 +346,9 @@ function QuestionModal({ q, testId, pos, onClose, onSaved }: { q: Question | nul
   const [correct, setCorrect] = useState(q?.correct ?? 0)
   const [explanation, setExplanation] = useState(q?.explanation || '')
   const [topic, setTopic] = useState(q?.topic || '')
+  const [imagePath, setImagePath] = useState<string | null>(q?.image_path || null)
+  const [newImage, setNewImage] = useState<File | null>(null)
+  const preview = useSignedImages([imagePath])
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
@@ -299,7 +361,15 @@ function QuestionModal({ q, testId, pos, onClose, onSaved }: { q: Question | nul
     const c = kept.findIndex((x) => x.i === correct)
     if (c < 0) return setErr('Düzgün cavab boş variant ola bilməz')
     setBusy(true)
-    const row = { text: text.trim(), options: kept.map((x) => x.o), correct: c, explanation: explanation.trim() || null, topic: topic.trim() || null }
+    let image_path = imagePath
+    try {
+      if (newImage) image_path = await uploadQuestionImage(testId, newImage, newImage.name)
+    } catch (e: any) {
+      setBusy(false)
+      return setErr(e.message)
+    }
+    if (q?.image_path && q.image_path !== image_path) await removeQuestionImages([q.image_path])
+    const row = { text: text.trim(), options: kept.map((x) => x.o), correct: c, explanation: explanation.trim() || null, topic: topic.trim() || null, image_path }
     const res = q
       ? await supabase.from('questions').update(row).eq('id', q.id)
       : await supabase.from('questions').insert({ ...row, test_id: testId, position: pos + 1 })
@@ -312,6 +382,21 @@ function QuestionModal({ q, testId, pos, onClose, onSaved }: { q: Question | nul
     <Modal open onClose={onClose} title={q ? 'Sualı redaktə et' : 'Yeni sual'} wide>
       <div className="space-y-3">
         <Field label="Sual"><Textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} /></Field>
+        <Field label="Şəkil (könüllü)" hint="PNG, JPG və ya WEBP, ən çox 5 MB">
+          <div className="space-y-2">
+            {newImage ? (
+              <img src={URL.createObjectURL(newImage)} alt="" className="max-h-48 rounded border border-slate-200" />
+            ) : imagePath && preview[imagePath] ? (
+              <img src={preview[imagePath]} alt="" className="max-h-48 rounded border border-slate-200" />
+            ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(e) => setNewImage(e.target.files?.[0] || null)} className="text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-indigo-700" />
+              {(imagePath || newImage) && (
+                <Button variant="ghost" size="sm" onClick={() => { setImagePath(null); setNewImage(null) }}>Şəkli sil</Button>
+              )}
+            </div>
+          </div>
+        </Field>
         <div className="space-y-2">
           <span className="block text-sm font-medium text-slate-700">Variantlar (düzgün olanı seçin)</span>
           {options.map((o, i) => (

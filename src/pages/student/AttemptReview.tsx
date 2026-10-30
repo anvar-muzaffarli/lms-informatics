@@ -5,6 +5,7 @@ import { useAuth } from '../../lib/auth'
 import { useAsync } from '../../lib/useAsync'
 import { Card, ErrorBox, Spinner } from '../../components/ui'
 import { cn, fmtDate, fmtDuration, LETTERS, pct, scoreColor } from '../../lib/utils'
+import { letterOnly, useSignedImages } from '../../lib/images'
 
 interface Review {
   attempt_id: string
@@ -16,7 +17,7 @@ interface Review {
   finished_at: string
   tab_switches: number
   show_answers: boolean
-  questions: { id: string; text: string; options: string[]; correct: number; chosen: number | null; explanation: string | null }[] | null
+  questions: { id: string; text: string; options: string[]; correct: number; chosen: number | null; explanation: string | null; image: string | null }[] | null
 }
 
 export default function AttemptReview() {
@@ -29,6 +30,8 @@ export default function AttemptReview() {
     if (error) throw new Error(error.message)
     return data as Review
   }, [id])
+
+  const urls = useSignedImages(data?.questions?.map((q) => q.image) ?? [])
 
   if (loading) return <Spinner />
   if (error || !data) return <ErrorBox>{error}</ErrorBox>
@@ -77,6 +80,11 @@ export default function AttemptReview() {
                   {ok ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" /> : <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />}
                   <p className="whitespace-pre-wrap font-medium text-slate-900"><span className="text-slate-400">{i + 1}.</span> {q.text}</p>
                 </div>
+                {q.image && urls[q.image] && (
+                  <a href={urls[q.image]} target="_blank" rel="noreferrer" className="mt-3 block pl-7">
+                    <img src={urls[q.image]} alt="Sualın şəkli" className="max-h-96 max-w-full rounded-lg border border-slate-200 object-contain" />
+                  </a>
+                )}
                 <div className="mt-3 space-y-1.5 pl-7">
                   {q.options.map((o, j) => (
                     <div
@@ -86,7 +94,7 @@ export default function AttemptReview() {
                         j === q.correct ? 'bg-emerald-50 text-emerald-900 font-medium' : j === q.chosen ? 'bg-rose-50 text-rose-900' : 'text-slate-600',
                       )}
                     >
-                      <b>{LETTERS[j]})</b> <span className="flex-1 whitespace-pre-wrap">{o}</span>
+                      <b>{LETTERS[j]})</b> <span className="flex-1 whitespace-pre-wrap">{letterOnly(q.options) ? '' : o}</span>
                       {j === q.correct && <span className="text-xs">✓ düzgün</span>}
                       {j === q.chosen && j !== q.correct && <span className="text-xs">sizin cavab</span>}
                     </div>

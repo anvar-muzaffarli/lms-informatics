@@ -81,6 +81,20 @@ Sadəcə `npm run dev` da işləyir, amma onda tələbə hesabı yaratmaq mümk�
 
 ---
 
+## Şəkilli suallar (v2)
+
+Suala şəkil əlavə etmək mümkündür: ya sual redaktorunda (**Sual əlavə et → Şəkil**), ya da toplu şəkildə ZIP faylı ilə.
+
+**ZIP formatı:** içində bir Excel faylı və şəkillər olur. Excel-də əlavə **Şəkil** sütunu var və orada şəklin fayl adı yazılır (məs. `f06-057.png`).
+Testin səhifəsində **Excel-dən yüklə** düyməsini basıb ZIP faylını seçin. Şəkillər avtomatik olaraq Supabase-ə yüklənir.
+
+Variantlar yalnız `A, B, C, D, E` hərflərindən ibarətdirsə (mətn şəklin özündədir), tələbə hərf düymələrini görür və belə suallarda variantlar qarışdırılmır.
+
+**Köhnə quraşdırmanı yeniləmək:** Supabase → SQL Editor bölməsində `supabase/schema.sql` faylını yenidən işlədin.
+Fayl təkrar işlədilə bilər, mövcud məlumatlar silinmir. O, `questions.image_path` sütununu və `question-images` bucket-ini əlavə edir.
+
+---
+
 ## Excel formatları
 
 **Suallar** (`samples/informatika-suallar-nümunə.xlsx`, 18 hazır sual):

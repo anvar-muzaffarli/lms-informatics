@@ -6,6 +6,7 @@ import { must, useAsync } from '../../lib/useAsync'
 import type { Group, Test } from '../../lib/types'
 import { Badge, Button, Empty, ErrorBox, Field, Input, Modal, PageTitle, Spinner, Table, Td } from '../../components/ui'
 import { fmtDate, pct, scoreColor } from '../../lib/utils'
+import { IMAGE_BUCKET, removeQuestionImages } from '../../lib/images'
 
 export default function AdminTests() {
   const nav = useNavigate()
@@ -42,14 +43,23 @@ export default function AdminTests() {
   const duplicate = async (t: Test) => {
     const { id: _id, created_at: _c, ...rest } = t
     const copy = must(await supabase.from('tests').insert({ ...rest, title: `${t.title} (surət)`, published: false }).select('id').single()) as { id: string }
-    const qs = must(await supabase.from('questions').select('position,text,options,correct,explanation,topic').eq('test_id', t.id)) as any[]
+    const qs = must(await supabase.from('questions').select('position,text,options,correct,explanation,topic,image_path').eq('test_id', t.id)) as any[]
+    // şəkillərin ayrıca surəti çıxarılır ki, bir testdən silinən şəkil digərini pozmasın
+    for (const q of qs) {
+      if (!q.image_path) continue
+      const to = `${copy.id}/${q.image_path.split('/').pop()}`
+      const { error } = await supabase.storage.from(IMAGE_BUCKET).copy(q.image_path, to)
+      q.image_path = error ? null : to
+    }
     if (qs.length) await supabase.from('questions').insert(qs.map((q) => ({ ...q, test_id: copy.id })))
     reload()
   }
 
   const remove = async (t: Test) => {
     if (!confirm(`"${t.title}" testi silinsin? Bütün suallar və nəticələr silinəcək.`)) return
+    const imgs = (must(await supabase.from('questions').select('image_path').eq('test_id', t.id).not('image_path', 'is', null)) as { image_path: string }[]).map((x) => x.image_path)
     await supabase.from('tests').delete().eq('id', t.id)
+    await removeQuestionImages(imgs)
     reload()
   }
 

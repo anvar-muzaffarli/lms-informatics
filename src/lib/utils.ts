@@ -58,9 +58,9 @@ export async function exportXlsx(rows: Record<string, unknown>[], filename: stri
   XLSX.writeFile(wb, filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`)
 }
 
-export async function readSheet(file: File): Promise<Record<string, unknown>[]> {
+export async function readSheet(file: File | ArrayBuffer): Promise<Record<string, unknown>[]> {
   const XLSX = await import('xlsx')
-  const buf = await file.arrayBuffer()
+  const buf = file instanceof ArrayBuffer ? file : await file.arrayBuffer()
   const wb = XLSX.read(buf, { type: 'array', cellFormula: true, sheetStubs: true })
   const ws = wb.Sheets[wb.SheetNames[0]]
   // "=SUM(A1:A10)" kimi düstur yazılmış xanaları mətn kimi saxla
@@ -98,6 +98,7 @@ export interface ParsedQuestion {
   correct: number
   explanation: string | null
   topic: string | null
+  image: string | null
 }
 
 export function parseQuestionRows(rows: Record<string, unknown>[]) {
@@ -137,6 +138,7 @@ export function parseQuestionRows(rows: Record<string, unknown>[]) {
       correct,
       explanation: pick(row, 'İzah', 'Izah', 'Şərh') || null,
       topic: pick(row, 'Mövzu', 'Movzu', 'Topic') || null,
+      image: pick(row, 'Şəkil', 'Sekil', 'Image') || null,
     })
   })
   return { ok, errors }

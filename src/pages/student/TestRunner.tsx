@@ -4,8 +4,9 @@ import { AlertTriangle, ChevronLeft, ChevronRight, Clock, Send } from 'lucide-re
 import { supabase } from '../../lib/supabase'
 import { Button, Card, ErrorBox, Modal, Spinner } from '../../components/ui'
 import { cn, LETTERS, seededShuffle } from '../../lib/utils'
+import { letterOnly, useSignedImages } from '../../lib/images'
 
-interface RunQuestion { id: string; text: string; options: string[] }
+interface RunQuestion { id: string; text: string; options: string[]; image: string | null }
 interface RunData {
   attempt_id: string
   title: string
@@ -30,6 +31,7 @@ export default function TestRunner() {
   const [confirm, setConfirm] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [warn, setWarn] = useState(false)
+  const [zoom, setZoom] = useState<string | null>(null)
   const offset = useRef(0)
   const submitted = useRef(false)
   const answersRef = useRef(answers)
@@ -114,10 +116,13 @@ export default function TestRunner() {
     const m: Record<string, number[]> = {}
     run?.questions.forEach((q) => {
       const idxs = q.options.map((_, i) => i)
-      m[q.id] = run.shuffle_options ? seededShuffle(idxs, run.attempt_id + q.id) : idxs
+      // şəkilli suallarda variantlar şəkildə yazıldığı üçün qarışdırılmır
+      m[q.id] = run.shuffle_options && !q.image ? seededShuffle(idxs, run.attempt_id + q.id) : idxs
     })
     return m
   }, [run])
+
+  const urls = useSignedImages(run?.questions.map((x) => x.image) ?? [])
 
   if (err)
     return (
@@ -150,6 +155,40 @@ export default function TestRunner() {
         <Card className="no-select">
           <div className="mb-2 text-sm font-medium text-indigo-600">Sual {idx + 1} / {total}</div>
           <p className="whitespace-pre-wrap text-lg font-medium leading-relaxed text-slate-900">{q.text}</p>
+          {q.image && (
+            <div className="mt-4">
+              {urls[q.image] ? (
+                <img
+                  src={urls[q.image]}
+                  alt="Sualın şəkli"
+                  onClick={() => setZoom(urls[q.image!])}
+                  className="max-h-[60vh] max-w-full cursor-zoom-in rounded-lg border border-slate-200 object-contain"
+                  draggable={false}
+                />
+              ) : (
+                <div className="flex h-40 items-center justify-center rounded-lg bg-slate-100 text-sm text-slate-500">Şəkil yüklənir...</div>
+              )}
+            </div>
+          )}
+          {letterOnly(q.options) ? (
+            <div className="mt-6 flex flex-wrap gap-3">
+              {order[q.id].map((orig) => {
+                const selected = answers[q.id] === orig
+                return (
+                  <button
+                    key={orig}
+                    onClick={() => setAnswers((a) => ({ ...a, [q.id]: orig }))}
+                    className={cn(
+                      'flex h-14 w-14 items-center justify-center rounded-xl border-2 text-lg font-bold transition cursor-pointer',
+                      selected ? 'border-indigo-500 bg-indigo-600 text-white' : 'border-slate-200 text-slate-700 hover:border-slate-300 hover:bg-slate-50',
+                    )}
+                  >
+                    {LETTERS[orig]}
+                  </button>
+                )
+              })}
+            </div>
+          ) : (
           <div className="mt-6 space-y-2.5">
             {order[q.id].map((orig, pos) => {
               const selected = answers[q.id] === orig
@@ -170,6 +209,7 @@ export default function TestRunner() {
               )
             })}
           </div>
+          )}
           <div className="mt-6 flex justify-between">
             <Button variant="secondary" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0}>
               <ChevronLeft className="h-4 w-4" /> Əvvəlki
@@ -221,6 +261,12 @@ export default function TestRunner() {
           <Button onClick={submit} loading={submitting}>Bəli, bitir</Button>
         </div>
       </Modal>
+
+      {zoom && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-slate-900/80 p-4 cursor-zoom-out" onClick={() => setZoom(null)}>
+          <img src={zoom} alt="Sualın şəkli" className="max-w-none rounded-lg bg-white" />
+        </div>
+      )}
 
       <Modal open={warn} onClose={() => setWarn(false)} title="Diqqət!">
         <p className="text-sm text-slate-600">Test zamanı başqa pəncərəyə və ya tab-a keçdiniz. Hər keçid qeydə alınır və müəllimə göstərilir.</p>

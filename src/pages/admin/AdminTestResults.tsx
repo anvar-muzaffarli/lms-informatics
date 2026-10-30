@@ -7,6 +7,7 @@ import { must, useAsync } from '../../lib/useAsync'
 import type { Attempt, Group, Profile, Question, Test } from '../../lib/types'
 import { Badge, Button, Card, ErrorBox, PageTitle, Select, Spinner, Stat, Table, Td } from '../../components/ui'
 import { cn, exportXlsx, fmtDate, fmtDuration, LETTERS, pct, scoreColor } from '../../lib/utils'
+import { letterOnly, useSignedImages } from '../../lib/images'
 
 export default function AdminTestResults() {
   const { id } = useParams()
@@ -24,6 +25,8 @@ export default function AdminTestResults() {
     const students = gids.length ? (must(await supabase.from('profiles').select('*').eq('role', 'student').in('group_id', gids).order('full_name')) as Profile[]) : []
     return { test: must(t) as Test, questions: must(q) as Question[], attempts: must(a) as Attempt[], groups: (must(g) as Group[]).filter((x) => gids.includes(x.id)), students }
   }, [id])
+
+  const urls = useSignedImages(tab === 'questions' ? data?.questions.map((q) => q.image_path) ?? [] : [])
 
   if (loading) return <Spinner />
   if (error || !data) return <ErrorBox>{error}</ErrorBox>
@@ -179,6 +182,9 @@ export default function AdminTestResults() {
                     <div className="text-xs text-slate-500">{shown} dəfə verilib</div>
                   </div>
                 </div>
+                {q.image_path && urls[q.image_path] && (
+                  <a href={urls[q.image_path]} target="_blank" rel="noreferrer"><img src={urls[q.image_path]} alt="" loading="lazy" className="mt-2 max-h-48 max-w-full rounded border border-slate-200 object-contain" /></a>
+                )}
                 <div className="mt-3 space-y-1.5">
                   {q.options.map((o, i) => {
                     const w = shown ? Math.round((picks[i] / shown) * 100) : 0
@@ -188,7 +194,7 @@ export default function AdminTestResults() {
                         <span className="w-5 font-bold text-slate-500">{LETTERS[i]}</span>
                         <div className="relative h-7 flex-1 overflow-hidden rounded bg-slate-100">
                           <div className={cn('absolute inset-y-0 left-0', i === q.correct ? 'bg-emerald-200' : isWrongTop ? 'bg-rose-200' : 'bg-slate-200')} style={{ width: `${w}%` }} />
-                          <span className="relative z-10 flex h-full items-center px-2 text-slate-800">{o}</span>
+                          <span className="relative z-10 flex h-full items-center px-2 text-slate-800">{letterOnly(q.options) ? '' : o}</span>
                         </div>
                         <span className="w-16 text-right text-xs text-slate-600">{picks[i]} ({w}%)</span>
                       </div>
